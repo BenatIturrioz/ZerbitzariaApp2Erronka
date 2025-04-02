@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.example.zerbitzariapp.ui.theme.ZerbitzariAppTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -51,10 +53,9 @@ import java.io.IOException
 import java.io.*
 import okhttp3.*
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.io.PrintWriter
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.coroutines.*
 import java.net.Socket
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -95,28 +96,42 @@ var eskaeraProduktuak: MutableList<EskaeraProduktua> = mutableListOf()
 
 @SuppressLint("RememberReturnType")
 @Composable
-fun ChatScreen(onNavigateToChat: () -> Unit,
-               onNavigateToMahaiakAukeratu: () -> Unit,
-
+fun ChatScreen(
+    onNavigateToChat: () -> Unit,
+    onNavigateToMahaiakAukeratu: () -> Unit,
 ) {
     var messageText by remember { mutableStateOf("") }
     val messages = remember { mutableStateListOf<Pair<String, Boolean>>() }
     val chatClient = remember { ChatClient(messages) }
 
     // Conectar al servidor cuando se inicia la pantalla
-    LaunchedEffect(true) {
+    LaunchedEffect(Unit) {
         chatClient.connect()
     }
 
+    // Desconectar al salir de la pantalla
+    DisposableEffect(Unit) {
+        onDispose {
+            CoroutineScope(Dispatchers.IO).launch {
+                chatClient.disconnect()
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        // Mostrar los mensajes
+        // Botones de navegación
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { onNavigateToMahaiakAukeratu() },
+                onClick = {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        chatClient.disconnect()
+                    }
+                    onNavigateToMahaiakAukeratu()
+                },
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Atzera", color = Color.Black)
@@ -124,33 +139,40 @@ fun ChatScreen(onNavigateToChat: () -> Unit,
 
             Button(
                 border = BorderStroke(2.dp, Color.Black),
-                onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
+                onClick = { onNavigateToChat() },
                 colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
             ) {
                 Text(text = "Txat", color = Color.Black)
             }
-
         }
 
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(messages) { (message, isUser) ->
+        // Lista de mensajes (en orden inverso para mostrar los más recientes arriba)
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            reverseLayout = true
+        ) {
+            items(messages.reversed()) { (message, isUser) ->
                 MessageItem(message = message, isUser = isUser)
             }
         }
 
-        // Campo de texto para el mensaje
+        // Campo de texto y botón de envío
         Row(modifier = Modifier.padding(16.dp)) {
             TextField(
                 value = messageText,
                 onValueChange = { messageText = it },
                 label = { Text("Escribe tu mensaje...") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                singleLine = true
             )
 
             IconButton(onClick = {
                 if (messageText.isNotBlank()) {
-                    chatClient.sendMessage(messageText) // Enviar mensaje al servidor
-                    messageText = "" // Limpiar campo de texto
+                    val messageToSend = messageText
+                    messageText = ""
+                    CoroutineScope(Dispatchers.IO).launch {
+                        chatClient.sendMessage(messageToSend) // Enviar mensaje completo (el servidor Java lo maneja)
+                    }
                 }
             }) {
                 Icon(imageVector = Icons.Default.Send, contentDescription = "Send")
@@ -171,94 +193,112 @@ fun MessageItem(message: String, isUser: Boolean) {
             modifier = Modifier
                 .background(
                     color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                    shape = MaterialTheme.shapes.medium
+                    shape = RoundedCornerShape(8.dp)
                 )
                 .padding(8.dp)
         ) {
-            Text(text = message, color = MaterialTheme.colorScheme.onPrimary)
+            Text(
+                text = message,
+                color = if (isUser) Color.White else Color.Black,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
 
-
 class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
-
+    private var socket: Socket? = null
     private var out: PrintWriter? = null
     private var reader: BufferedReader? = null
-    private var socket: Socket? = null
+    private var isRunning = true
 
     suspend fun connect() {
-        try {
-            println("Intentando conectar al servidor...")
-            socket = withContext(Dispatchers.IO) {
-                Socket("localhost", 5555)
-            }
-            println("Conectado al servidor.")
+        withContext(Dispatchers.IO) {
+            try {
+                Log.d("ChatClient", "Intentando conectar al servidor...")
+                // Cambia "localhost" por la IP real del servidor en producción
+                socket = Socket("10.0.2.2", 5555) // 10.0.2.2 es la IP localhost del emulador Android
+                out = PrintWriter(socket!!.getOutputStream(), true)
+                reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
+                Log.d("ChatClient", "Conectado al servidor.")
 
-            out = PrintWriter(OutputStreamWriter(socket!!.getOutputStream()), true)
-            reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
-
-            withContext(Dispatchers.IO) {
-                while (true) {
-                    val message = reader?.readLine()
-                    if (message == null) {
-                        println("Conexión cerrada por el servidor.")
-                        break
-                    }
-                    println("Mensaje recibido: $message")
-                    messages.add(Pair(message, false))
+                // Recibir mensaje de bienvenida del servidor
+                val welcomeMessage = reader?.readLine()
+                welcomeMessage?.let {
+                    messages.add(Pair(it, false))
                 }
+
+                // Iniciar recepción de mensajes
+                receiveMessages()
+            } catch (e: Exception) {
+                Log.e("ChatClient", "Error al conectar al servidor:", e)
+                messages.add(Pair("Error al conectar: ${e.message}", false))
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            println("Error en connect(): ${e.message}")
-            messages.add(Pair("Error al conectar con el servidor: ${e.message}", false))
         }
     }
 
-    fun sendMessage(message: String) {
-        try {
-            println("Intentando enviar mensaje: $message")
+    private suspend fun receiveMessages() {
+        withContext(Dispatchers.IO) {
+            try {
+                while (isRunning && isConnected()) {
+                    val message = reader?.readLine()
+                    if (message == null) {
+                        Log.w("ChatClient", "Conexión cerrada por el servidor.")
+                        break
+                    }
+                    Log.d("ChatClient", "Mensaje recibido: $message")
 
-            if (socket == null || socket!!.isClosed || !socket!!.isConnected) {
-                println("Error: El socket no está conectado.")
-                messages.add(Pair("Error: El socket no está conectado.", false))
-                return
+                    // Añadir mensaje recibido a la lista
+                    messages.add(Pair(message, false))
+                }
+            } catch (e: Exception) {
+                Log.e("ChatClient", "Error al recibir mensajes:", e)
+                messages.add(Pair("Error en la conexión: ${e.message}", false))
+            } finally {
+                disconnect()
             }
+        }
+    }
 
-            if (out == null) {
-                println("Error: PrintWriter no está inicializado.")
-                messages.add(Pair("Error: PrintWriter no está inicializado.", false))
-                return
+    suspend fun sendMessage(message: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                if (!isConnected() || out == null) {
+                    Log.e("ChatClient", "No se puede enviar: No hay conexión.")
+                    messages.add(Pair("No se puede enviar: No hay conexión.", false))
+                    return@withContext
+                }
+
+                // Enviar mensaje completo (el servidor Java lo manejará)
+                out!!.println(message)
+                Log.d("ChatClient", "Mensaje enviado: $message")
+
+                // Mostrar nuestro propio mensaje en el chat
+                messages.add(Pair(message, true))
+            } catch (e: Exception) {
+                Log.e("ChatClient", "Error al enviar mensaje:", e)
+                messages.add(Pair("Error al enviar: ${e.message}", false))
             }
-
-            val prefixedMessage = "[Zerbitzaria] $message"
-            out!!.println(prefixedMessage)
-            println("Mensaje enviado correctamente.")
-
-            messages.add(Pair(message, true))
-        } catch (e: IOException) {
-            e.printStackTrace()
-            println("Error en sendMessage(): ${e.message}")
-            messages.add(Pair("Error al enviar el mensaje: ${e.message}", false))
-        } catch (e: Exception) {
-            e.printStackTrace()
-            println("Error inesperado en sendMessage(): ${e.message}")
-            messages.add(Pair("Error inesperado: ${e.message}", false))
         }
     }
 
     fun disconnect() {
         try {
-            println("Desconectando del servidor...")
+            isRunning = false
+            out?.close()
+            reader?.close()
             socket?.close()
-            println("Desconexión completada.")
+            Log.d("ChatClient", "Desconexión completada.")
         } catch (e: Exception) {
-            e.printStackTrace()
-            println("Error en disconnect(): ${e.message}")
+            Log.e("ChatClient", "Error al desconectar:", e)
         }
     }
+
+    private fun isConnected(): Boolean {
+        return socket?.isConnected == true && !socket!!.isClosed
+    }
 }
+
 
 fun fetchTables(onResult: (List<String>) -> Unit) {
     val client = OkHttpClient()
