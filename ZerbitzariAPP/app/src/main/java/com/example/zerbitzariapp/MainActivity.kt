@@ -62,6 +62,20 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.log
+import java.security.spec.KeySpec
+import java.security.SecureRandom
+import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.example.chatapp.ChatClient
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import android.util.Base64
+import kotlin.random.Random
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,7 +105,35 @@ data class EskaeraProduktua(
 )
 
 var eskaeraProduktuak: MutableList<EskaeraProduktua> = mutableListOf()
+object EncryptionUtils {
+    private const val SECRET_KEY = "MySecretKey12345" // Debe tener exactamente 16 caracteres
 
+    fun encrypt(strToEncrypt: String): String? {
+        return try {
+            val secretKey = SecretKeySpec(SECRET_KEY.toByteArray(Charsets.UTF_8), "AES")
+            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            val encryptedBytes = cipher.doFinal(strToEncrypt.toByteArray(Charsets.UTF_8))
+            Base64.encodeToString(encryptedBytes, Base64.DEFAULT).trim()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun decrypt(strToDecrypt: String): String? {
+        return try {
+            val secretKey = SecretKeySpec(SECRET_KEY.toByteArray(Charsets.UTF_8), "AES")
+            val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey)
+            val decodedBytes = Base64.decode(strToDecrypt, Base64.DEFAULT)
+            String(cipher.doFinal(decodedBytes), Charsets.UTF_8)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+}
 
 
 @SuppressLint("RememberReturnType")
@@ -241,15 +283,22 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
         withContext(Dispatchers.IO) {
             try {
                 while (isRunning && isConnected()) {
-                    val message = reader?.readLine()
-                    if (message == null) {
+                    val encryptedMessage = reader?.readLine()
+                    if (encryptedMessage == null) {
                         Log.w("ChatClient", "Conexión cerrada por el servidor.")
                         break
                     }
-                    Log.d("ChatClient", "Mensaje recibido: $message")
+                    Log.d("ChatClient", "Mensaje cifrado recibido: $encryptedMessage")
 
-                    // Añadir mensaje recibido a la lista
-                    messages.add(Pair(message, false))
+                    // Desencriptar mensaje
+                    val decryptedMessage = EncryptionUtils.decrypt(encryptedMessage)
+                    if (decryptedMessage != null) {
+                        Log.d("ChatClient", "Mensaje desencriptado: $decryptedMessage")
+                        messages.add(Pair(decryptedMessage, false))
+                    } else {
+                        Log.e("ChatClient", "No se pudo desencriptar el mensaje.")
+                        messages.add(Pair("Error al desencriptar el mensaje", false))
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("ChatClient", "Error al recibir mensajes:", e)
@@ -259,6 +308,7 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
             }
         }
     }
+
 
     suspend fun sendMessage(message: String) {
         withContext(Dispatchers.IO) {
@@ -300,9 +350,12 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
 }
 
 
+
+
+
 fun fetchTables(onResult: (List<String>) -> Unit) {
     val client = OkHttpClient()
-    val url = "http://10.0.2.2/getMesas.php" // Cambia esto si usas un dispositivo físico, usa la IP de tu PC en lugar de 10.0.2.2
+    val url = "http://10.0.2.2/getMesas.php"
     val request = Request.Builder()
         .url(url)
         .build()
@@ -417,7 +470,7 @@ fun fetchErabiltzaileak(onResult: (List<Zerbitzaria>) -> Unit) {
                         val jsonObject = jsonArray.getJSONObject(i)
                         val zerbitzaria = Zerbitzaria(
                             id = jsonObject.getInt("id"),
-                            izenaZ = jsonObject.getString("erabiltzaileIzena")
+                            izenaZ = jsonObject.getString("erabiltzaileIzena"),
                         )
                         zerbitzariak.add(zerbitzaria)
                     }
@@ -490,48 +543,7 @@ fun fetchHighestErreserbaId(onResult: (Int?) -> Unit) {
 
 
 
-fun getEskaerak(onResult: (List<String>?) -> Unit) {
-    val client = OkHttpClient()
-    val url = "http://10.0.2.2/getEskaera.php" // Cambia esto si usas un dispositivo físico
-    val request = Request.Builder()
-        .url(url)
-        .build()
 
-    CoroutineScope(Dispatchers.IO).launch {
-        try {
-            val response = client.newCall(request).execute()
-
-            if (response.isSuccessful) {
-                val jsonData = response.body?.string()
-
-                val eskaerakList = mutableListOf<String>()
-
-                if (!jsonData.isNullOrEmpty()) {
-                    val jsonArray = JSONArray(jsonData)
-                    for (i in 0 until jsonArray.length()) {
-                        val eskaera = jsonArray.getJSONObject(i).optString("eskaera", "")
-                        if (eskaera.isNotEmpty()) {
-                            eskaerakList.add(eskaera)
-                        }
-                    }
-                }
-
-                Log.d("GetEskaerak", "Eskaerak: $eskaerakList")
-
-                withContext(Dispatchers.Main) {
-                    onResult(eskaerakList)
-                }
-            } else {
-                Log.e("GetEskaerak", "Error: ${response.code}")
-                withContext(Dispatchers.Main) { onResult(null) }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Log.e("GetEskaerak", "Request failed: ${e.message}")
-            withContext(Dispatchers.Main) { onResult(null) }
-        }
-    }
-}
 
 
 
@@ -937,13 +949,7 @@ fun CharlieApp(onNavigateToMainScreen: () -> Unit, onNavigateToChat: () -> Unit)
                 ) {
                     Text("Itxi", color = Color.Black)
                 }
-                Button(
-                    border = BorderStroke(2.dp, Color.Black),
-                    onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
-                    colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
-                ) {
-                    Text(text = "Txat", color = Color.Black)
-                }
+
 
             }
         }
@@ -1011,13 +1017,7 @@ fun MainScreen(onNavigateToMahaiakAukeratu: () -> Unit, onNavigateToChat: () -> 
                     onClick = { onNavigateToCharliesApp() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6600))
                 ) { Text("Atzera", color = Color.Black) }
-                Button(
-                    border = BorderStroke(2.dp, Color.Black),
-                    onClick = { onNavigateToChat() },  // Navegar a la pantalla de chat
-                    colors = ButtonDefaults.buttonColors(Color(0xFFFF6600))
-                ) {
-                    Text(text = "Txat", color = Color.Black)
-                }
+
 
             }
         }
@@ -1054,6 +1054,8 @@ fun MahaiakAukeratu(onNavigateToKomandaAukeratu: () -> Unit, onNavigateToChat: (
             tableList.value = fetchedTables
         }
     }
+
+
 
     Scaffold(
         topBar = {
