@@ -234,7 +234,7 @@ fun MessageItem(message: String, isUser: Boolean) {
         Box(
             modifier = Modifier
                 .background(
-                    color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    color = if (isUser) Color(0xFFFFA500) else Color(0xFFADD8E6), // Naranja y azul claro
                     shape = RoundedCornerShape(8.dp)
                 )
                 .padding(8.dp)
@@ -319,12 +319,21 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
                     return@withContext
                 }
 
-                // Enviar mensaje completo (el servidor Java lo manejará)
-                out!!.println(message)
-                Log.d("ChatClient", "Mensaje enviado: $message")
+                // Encriptar mensaje antes de enviarlo
+                val encryptedMessage = EncryptionUtils.encrypt(message)
+                if (encryptedMessage != null) {
+                    Log.d("ChatClient", "Mensaje cifrado: $encryptedMessage")
 
-                // Mostrar nuestro propio mensaje en el chat
-                messages.add(Pair(message, true))
+                    // Enviar mensaje encriptado
+                    out!!.println(encryptedMessage)
+                    Log.d("ChatClient", "Mensaje enviado (encriptado): $encryptedMessage")
+
+                    // Mostrar nuestro propio mensaje en el chat (sin encriptar)
+                    messages.add(Pair(message, true))
+                } else {
+                    Log.e("ChatClient", "No se pudo encriptar el mensaje.")
+                    messages.add(Pair("Error al encriptar el mensaje", false))
+                }
             } catch (e: Exception) {
                 Log.e("ChatClient", "Error al enviar mensaje:", e)
                 messages.add(Pair("Error al enviar: ${e.message}", false))
