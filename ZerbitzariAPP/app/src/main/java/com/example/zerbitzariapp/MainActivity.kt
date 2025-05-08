@@ -319,8 +319,11 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
                     return@withContext
                 }
 
+                // Añadir prefijo "zerbitzaria:" al mensaje
+                val prefixedMessage = "[zerbitzaria] $message"
+
                 // Encriptar mensaje antes de enviarlo
-                val encryptedMessage = EncryptionUtils.encrypt(message)
+                val encryptedMessage = EncryptionUtils.encrypt(prefixedMessage)
                 if (encryptedMessage != null) {
                     Log.d("ChatClient", "Mensaje cifrado: $encryptedMessage")
 
@@ -329,7 +332,7 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
                     Log.d("ChatClient", "Mensaje enviado (encriptado): $encryptedMessage")
 
                     // Mostrar nuestro propio mensaje en el chat (sin encriptar)
-                    messages.add(Pair(message, true))
+                    messages.add(Pair(prefixedMessage, true))
                 } else {
                     Log.e("ChatClient", "No se pudo encriptar el mensaje.")
                     messages.add(Pair("Error al encriptar el mensaje", false))
@@ -340,6 +343,7 @@ class ChatClient(private val messages: MutableList<Pair<String, Boolean>>) {
             }
         }
     }
+
 
     fun disconnect() {
         try {
